@@ -5,7 +5,8 @@ import argparse
 import os
 import string
 import thread
-import easygui  #REMEMBER TO ADD DEPENDENCY TO START FILE  
+import easygui   
+
 
 			
 # Create a server socket, bind it to a port and start listening
@@ -14,6 +15,9 @@ def main():
 	args = get_params()
 	#Initialize socket of proxy
 	initialize_socket(args)
+	
+	global state
+	state = []
 	while True:
 		print('-----------------------------------------------------------------------')
 		counter[0] = counter[0] + 1
@@ -29,10 +33,49 @@ def get_params():
 	#Initialize parser
 	parser = argparse.ArgumentParser(description='Configure IP Address and Port number for server.')
 	parser.add_argument('port', type=int, help='Port number')
+	parser.add_argument('features', nargs='*', help='Enter the features you want the proxy to implement')
 	
 	#Set variable args to results of parser
 	args = parser.parse_args()
 	return args
+
+#Send request to the server
+def request_server(host, port, request):
+	try:
+		send_socket = socket(AF_INET, SOCK_STREAM)                                  
+		#Connect the socket to port 80 (Internet) and send request
+		send_socket.connect((host, port))
+		send_socket.send(request)
+		request_message(request, "[CLI --- PRX ==> SRV]")
+		global first_response
+		first_response = True
+		while True:
+			if(first_response):
+				print(request.split("\n")[0])
+			#Receive response from server to proxy
+			response = send_socket.recv(1024)
+			switch_state(request)
+			do_feature()
+			response_message(response, "[CLI --- PRX <== SRV]")
+			#Send response from proxy to client
+			if(len(response) > 0):
+				parsed_response = remove_hopper(response) 
+				response_message(response, "[CLI <== PRX --- SRV]")
+				proxy_client.send(response)
+			first_response = False
+		#Close server socket and client socket
+		send_socket.close()
+		print("[SRV disconnected]")
+		proxy_client.close()
+		print("[CLI disconnected]")	
+
+	except Exception as e:
+		#Close server socket and client socket 
+		print(e)
+		send_socket.close()
+		#print("[SRV disconnected]\n")
+		proxy_client.close()
+		#print("[CLI disconnected]\n")
 
 #Initialize socket that receives requests from the client 
 def initialize_socket(args):
@@ -56,61 +99,19 @@ def initialize_socket(args):
 #Receives requests from the client to the proxy	
 def request_proxy():
 	#Start receiving data from the client
-	global proxy_client
-	proxy_client, addr = client_proxy.accept()
-	print("[CLI connected to " + str(addr[0]) + ":" + str(addr[1]) + "]\n")
-	#Receive the request from the client to proxy
-	request = proxy_client.recv(1024)
-	print("[CLI ==> PRX -- SRV]")
-	#Remove hop to hop headers from request
-	request = remove_hopper(request)
-	request_message(request)
-	#Extract host and port number from request
-	host, port = get_host(request)
-	thread.start_new_thread(request_server,(host, port, request))
-
-#Send request to the server
-def request_server(host, port, request):
-	try:
-		send_socket = socket(AF_INET, SOCK_STREAM)                                  
-		#Connect the socket to port 80 (Internet) and send request
-		send_socket.connect((host, port))
+		global proxy_client
+		proxy_client, addr = client_proxy.accept()
+		print("[CLI connected to " + str(addr[0]) + ":" + str(addr[1]) + "]\n")
+		#Receive the request from the client to proxy
+		request = proxy_client.recv(1024)
 		
+		#Remove hop to hop headers from request
+		request = remove_hopper(request)
+		request_message(request, "[CLI ==> PRX -- SRV]")
+		#Extract host and port number from request
+		host, port = get_host(request)
+		thread.start_new_thread(request_server,(host, port, request))
 		
-		send_socket.send(request)
-		print("[CLI --- PRX ==> SRV]")
-		request_message(request)
-		
-		while True:
-			#Receive response from server to proxy
-			response = send_socket.recv(1024)
-			print("[CLI --- PRX <== SRV]")
-			response_message(response)
-			#Send response from proxy to client
-			if(len(response) > 0):
-				parsed_response = remove_hopper(response) 
-				proxy_client.send(response)
-				print("[CLI <== PRX --- SRV]")
-				response_message(response)
-			else:
-				break
-		#Close server socket and client socket
-		send_socket.close()
-		print("[SRV disconnected]")
-		proxy_client.close()
-		print("[CLI disconnected]")
-		counter = [0]
-
-	except Exception as e:
-		#Close server socket and client socket 
-		print(e)
-		send_socket.close()
-		#print("[SRV disconnected]\n")
-		proxy_client.close()
-		#print("[CLI disconnected]\n")
-		counter = [0]
-		
-
 	
 #Removes hop to hop headers
 def remove_hopper(message):
@@ -124,19 +125,18 @@ def remove_hopper(message):
 	return output
 
 #Prints the request method for request
-def request_message(message):
+def request_message(message, sign):
+	print(sign)
 	first_header = message.split("\n")[0]
 	print(" > " + first_header)
+	#print(message) #REMOVE WHEN DONE
 	
 #Prints the status code, content-type, and content-length of response
-def response_message(message):
-	print(message)
+def response_message(message, sign):
 	lines = message.split("\n")
 	status_code = ""
 	#Searches for line with status code
-	for line in lines:
-		if(line.split("/")[0] == "HTTP"):
-			status_code = line[9:]
+	status_code = lines[0][9:]
 	
 	content_type = ""
 	#Searches for line with content type
@@ -144,10 +144,12 @@ def response_message(message):
 		if(line.split(":")[0] == "Content-Type"):
 			content_type = line.split(" ")[1]
 			break
-	#if(status_code != ""):
-	print(" > " + status_code)
-	print(" > " + content_type)
-	print(" " + str(len(message)) + "bytes")
+			
+	if(lines[0].find("HTTP") != -1):
+		print(sign)
+		print(" > " + status_code)
+		print(" > " + content_type)
+		print(" " + str(len(message)) + "bytes")
 
 #Extracts host and port number from HTTP request
 def get_host(message):
@@ -165,9 +167,24 @@ def get_host(message):
 		
 	return (host, port)
 
+def switch_state(message):
+	#-mt -comp -popup
+	lines = message.split("\n")
+	#print(lines[0])
+	if("?start_popup" in lines[0]):
+		print("***********************************************************************************************************")
+		state.append("popup")
+	if("?start_popup" in lines[0]):
+		state.remove("popup")	
+	
+
+def do_feature():
+	if("popup" in state and first_response):
+		start_popup()
+		print("POPUP\n")
+
 def start_popup():
 	easygui.msgbox("You have been hacked!", title="Hacked!")
-		
 	
 main()
 
