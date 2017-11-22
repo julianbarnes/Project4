@@ -4,7 +4,7 @@ import io
 import argparse
 import os
 import string
-import thread
+import _thread
 import easygui  #REMEMBER TO ADD DEPENDENCY TO START FILE  
 
 			
@@ -49,7 +49,7 @@ def initialize_socket(args):
 		client_proxy.listen(10)
 		print('Starting proxy server on port ' + str(args.port))
 		
-	except Exception, e:
+	except Exception as e:
 		print("Connection Error\n")
 		print(e)
 		
@@ -67,7 +67,7 @@ def request_proxy():
 	request_message(request)
 	#Extract host and port number from request
 	host, port = get_host(request)
-	thread.start_new_thread(request_server,(host, port, request))
+	_thread.start(request_server,(host, port, request))
 
 #Send request to the server
 def request_server(host, port, request):
@@ -114,14 +114,14 @@ def request_server(host, port, request):
 	
 #Removes hop to hop headers
 def remove_hopper(message):
-	lines = message.split("\n")
-	hoptohop = ["Connection", "Transfer-Encoding", "Keep-Alive", "Proxy-Authorization", "Proxy-Authentication", "Trailer", "Upgrade"]
-	output = ""
-	#Copies header lines that are not in hoptohop array
-	for line in lines:
-		if(line.split(":")[0] not in hoptohop):
-			output = output + line + "\n"
-	return output
+        lines = message.split("\n")
+        hoptohop = ["Connection", "Transfer-Encoding", "Keep-Alive", "Proxy-Authorization", "Proxy-Authentication", "Trailer", "Upgrade"]
+        output = ""
+        #Copies header lines that are not in hoptohop array
+        for line in lines:
+                if(line.split(":")[0] not in hoptohop):
+                        output = output + line + "\n"
+        return output
 
 #Prints the request method for request
 def request_message(message):
