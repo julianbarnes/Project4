@@ -6,23 +6,25 @@ import os
 import string
 import thread
 import easygui   
+import StringIO
+import gzip
 
 
-			
 # Create a server socket, bind it to a port and start listening
 def main():
 	#Request params from user
 	args = get_params()
 	#Initialize socket of proxy
-	initialize_socket(args)
+	client_proxy = initialize_socket(args)
+	client_proxy.listen(10)
 	
 	global state
-	state = []
+	state = ["zip"]
 	while True:
 		print('-----------------------------------------------------------------------')
 		counter[0] = counter[0] + 1
 		print(str(counter[0]) + "\n")
-		request_proxy()
+		thread.start_new_thread(request_proxy, (client_proxy,))
 
 	client_proxy.close()
 	sys.exit()
@@ -40,38 +42,40 @@ def get_params():
 	return args
 
 #Send request to the server
-def request_server(host, port, request):
+def request_server(host, port, request, proxy_client):
 	try:
 		send_socket = socket(AF_INET, SOCK_STREAM)                                  
 		#Connect the socket to port 80 (Internet) and send request
 		send_socket.connect((host, port))
 		send_socket.send(request)
 		request_message(request, "[CLI --- PRX ==> SRV]")
-		global first_response
-		first_response = True
-		while True:
-			if(first_response):
-				print(request.split("\n")[0])
-			#Receive response from server to proxy
-			response = send_socket.recv(1024)
-			switch_state(request)
-			do_feature()
-			response_message(response, "[CLI --- PRX <== SRV]")
-			#Send response from proxy to client
-			if(len(response) > 0):
-				parsed_response = remove_hopper(response) 
-				response_message(response, "[CLI <== PRX --- SRV]")
-				proxy_client.send(response)
-			first_response = False
+		switch_state(request)
+		
+		response = send_socket.recv(1024)
+		response_message(response, "[CLI --- PRX <== SRV]")
+		do_feature(response)
+		
+		if("zip" not in state):
+			proxy_client.send(response)
+			response_message(response, "[CLI <== PRX --- SRV]")
+			while True:
+				#Receive response from server to proxy
+				response = send_socket.recv(1024)
+				#Send response from proxy to client
+				if(len(response) > 0): 
+					proxy_client.send(response)
+					response_message(response, "[CLI <== PRX --- SRV]")
+
 		#Close server socket and client socket
 		send_socket.close()
 		print("[SRV disconnected]")
 		proxy_client.close()
-		print("[CLI disconnected]")	
+		print("[CLI disconnected]")
+		
 
 	except Exception as e:
-		#Close server socket and client socket 
 		print(e)
+		#Close server socket and client socket 
 		send_socket.close()
 		#print("[SRV disconnected]\n")
 		proxy_client.close()
@@ -83,13 +87,13 @@ def initialize_socket(args):
 	counter = [0]
 	try:
 		#Initialize socket 
-		global client_proxy
 		client_proxy = socket(AF_INET, SOCK_STREAM)
 		client_proxy.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
 		#Bind socket to port 
 		client_proxy.bind(('',args.port))
 		#Set socket to listen for connection requests
-		client_proxy.listen(10)
+		
+		return client_proxy
 		print('Starting proxy server on port ' + str(args.port))
 		
 	except Exception, e:
@@ -97,9 +101,8 @@ def initialize_socket(args):
 		print(e)
 		
 #Receives requests from the client to the proxy	
-def request_proxy():
+def request_proxy(client_proxy):
 	#Start receiving data from the client
-		global proxy_client
 		proxy_client, addr = client_proxy.accept()
 		print("[CLI connected to " + str(addr[0]) + ":" + str(addr[1]) + "]\n")
 		#Receive the request from the client to proxy
@@ -110,7 +113,8 @@ def request_proxy():
 		request_message(request, "[CLI ==> PRX -- SRV]")
 		#Extract host and port number from request
 		host, port = get_host(request)
-		thread.start_new_thread(request_server,(host, port, request))
+		request_server(host, port, request, proxy_client)
+			
 		
 	
 #Removes hop to hop headers
@@ -172,19 +176,41 @@ def switch_state(message):
 	lines = message.split("\n")
 	#print(lines[0])
 	if("?start_popup" in lines[0]):
-		print("***********************************************************************************************************")
 		state.append("popup")
 	if("?start_popup" in lines[0]):
 		state.remove("popup")	
 	
 
-def do_feature():
-	if("popup" in state and first_response):
+def do_feature(response):
+	if("popup" in state):
 		start_popup()
-		print("POPUP\n")
+		
+	if("zip" in state):
+		print("ZIPPED\n")
+		headers = response.split("\r\n\r\n")[0]
+		body = response.split("\r\n\r\n")[1]
+		zipped_response = StringIO.StringIO()
+		with gzip.GzipFile(fileobj=zipped_response, mode="w") as zipper:
+			zipper.write(body)
+			while True:
+				#Receive response from server to proxy
+				response = send_socket.recv(1024)
+				#Send response from proxy to client
+				if(len(response) > 0): 
+					zipper.write(response)
+
+		response_message(response, "[CLI <== PRX --- SRV]")			
+		proxy_client.send(headers + "\r\n\r\n")
+		proxy_client.send(zipped_response)
 
 def start_popup():
 	easygui.msgbox("You have been hacked!", title="Hacked!")
+	
+def file_zip(response):
+	contents = response.split("\r\n\n")
+	headers = contents[0]
+	body = contents 
+	
 	
 main()
 
