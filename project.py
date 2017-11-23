@@ -24,7 +24,8 @@ def main():
 		print('-----------------------------------------------------------------------')
 		counter[0] = counter[0] + 1
 		print(str(counter[0]) + "\n")
-		thread.start_new_thread(request_proxy, (client_proxy,))
+		proxy_client, addr = client_proxy.accept()
+		thread.start_new_thread(request_proxy, (proxy_client,addr))
 
 	client_proxy.close()
 	sys.exit()
@@ -41,6 +42,20 @@ def get_params():
 	args = parser.parse_args()
 	return args
 
+#Receives requests from the client to the proxy	
+def request_proxy(proxy_client, addr):
+	#Start receiving data from the client
+	print("[CLI connected to " + str(addr[0]) + ":" + str(addr[1]) + "]\n")
+	#Receive the request from the client to proxy
+	request = proxy_client.recv(1024)
+
+	#Remove hop to hop headers from request
+	request = remove_hopper(request)
+	request_message(request, "[CLI ==> PRX -- SRV]")
+	#Extract host and port number from request
+	host, port = get_host(request)
+	request_server(host, port, request, proxy_client)
+
 #Send request to the server
 def request_server(host, port, request, proxy_client):
 	try:
@@ -53,9 +68,10 @@ def request_server(host, port, request, proxy_client):
 		
 		response = send_socket.recv(1024)
 		response_message(response, "[CLI --- PRX <== SRV]")
-		do_feature(response)
+		do_feature(response, send_socket, proxy_client)
 		
-		if("zip" not in state):
+		if("zip" not in state or not accepts_encoding(request)):
+			print("UNZIPPED")
 			proxy_client.send(response)
 			response_message(response, "[CLI <== PRX --- SRV]")
 			while True:
@@ -65,6 +81,8 @@ def request_server(host, port, request, proxy_client):
 				if(len(response) > 0): 
 					proxy_client.send(response)
 					response_message(response, "[CLI <== PRX --- SRV]")
+				else:
+					break
 
 		#Close server socket and client socket
 		send_socket.close()
@@ -74,7 +92,9 @@ def request_server(host, port, request, proxy_client):
 		
 
 	except Exception as e:
-		print(e)
+		#print(e)
+		#print(port)
+		#print(host)
 		#Close server socket and client socket 
 		send_socket.close()
 		#print("[SRV disconnected]\n")
@@ -100,20 +120,7 @@ def initialize_socket(args):
 		print("Connection Error\n")
 		print(e)
 		
-#Receives requests from the client to the proxy	
-def request_proxy(client_proxy):
-	#Start receiving data from the client
-		proxy_client, addr = client_proxy.accept()
-		print("[CLI connected to " + str(addr[0]) + ":" + str(addr[1]) + "]\n")
-		#Receive the request from the client to proxy
-		request = proxy_client.recv(1024)
-		
-		#Remove hop to hop headers from request
-		request = remove_hopper(request)
-		request_message(request, "[CLI ==> PRX -- SRV]")
-		#Extract host and port number from request
-		host, port = get_host(request)
-		request_server(host, port, request, proxy_client)
+
 			
 		
 	
@@ -137,23 +144,26 @@ def request_message(message, sign):
 	
 #Prints the status code, content-type, and content-length of response
 def response_message(message, sign):
-	lines = message.split("\n")
-	status_code = ""
-	#Searches for line with status code
-	status_code = lines[0][9:]
-	
-	content_type = ""
-	#Searches for line with content type
-	for line in lines:
-		if(line.split(":")[0] == "Content-Type"):
-			content_type = line.split(" ")[1]
-			break
-			
-	if(lines[0].find("HTTP") != -1):
-		print(sign)
-		print(" > " + status_code)
-		print(" > " + content_type)
-		print(" " + str(len(message)) + "bytes")
+	try:
+		lines = message.split("\n")
+		status_code = ""
+		#Searches for line with status code
+		status_code = lines[0][9:]
+
+		content_type = ""
+		#Searches for line with content type
+		for line in lines:
+			if(line.split(":")[0] == "Content-Type"):
+				content_type = line.split(" ")[1]
+				break
+
+		if(lines[0].find("HTTP") != -1):
+			print(sign)
+			print(" > " + status_code)
+			print(" > " + content_type)
+			print(" " + str(len(message)) + "bytes")
+	except Exception as e:
+		print("response message error")
 
 #Extracts host and port number from HTTP request
 def get_host(message):
@@ -165,6 +175,7 @@ def get_host(message):
 	host = lines[k][6:-1]
 	hostandport = lines[k].split(":")
 	if(len(hostandport) > 2):
+		host = hostandport[1][1:]
 		port = int(hostandport[2])
 	else:
 		port = 80
@@ -181,16 +192,19 @@ def switch_state(message):
 		state.remove("popup")	
 	
 
-def do_feature(response):
+def do_feature(request, response, send_socket, proxy_client):
 	if("popup" in state):
 		start_popup()
 		
-	if("zip" in state):
-		print("ZIPPED\n")
+	if("zip" in state and accepts_encoding(request)):
+		
 		headers = response.split("\r\n\r\n")[0]
 		body = response.split("\r\n\r\n")[1]
+		response_message(headers, "[CLI <== PRX --- SRV]")			
+		proxy_client.send(headers + "\r\n\r\n")
 		zipped_response = StringIO.StringIO()
 		with gzip.GzipFile(fileobj=zipped_response, mode="w") as zipper:
+			print("ZIPPED\n")
 			zipper.write(body)
 			while True:
 				#Receive response from server to proxy
@@ -198,10 +212,11 @@ def do_feature(response):
 				#Send response from proxy to client
 				if(len(response) > 0): 
 					zipper.write(response)
-
-		response_message(response, "[CLI <== PRX --- SRV]")			
-		proxy_client.send(headers + "\r\n\r\n")
-		proxy_client.send(zipped_response)
+				else:
+					break
+		
+		proxy_client.send(zipped_response.getvalue())
+		
 
 def start_popup():
 	easygui.msgbox("You have been hacked!", title="Hacked!")
@@ -209,7 +224,18 @@ def start_popup():
 def file_zip(response):
 	contents = response.split("\r\n\n")
 	headers = contents[0]
-	body = contents 
+	body = contents[1]
+
+def accepts_encoding(request):
+	k = 0
+	lines = request.split("\r\n")
+	while "Accept-Encoding" not in lines[k] and k <= len(lines):
+		k = k + 1
+	if "gzip" in lines[k]:
+		return True
+	else:
+		return False
+		
 	
 	
 main()
